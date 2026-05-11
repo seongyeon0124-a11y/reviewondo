@@ -19,32 +19,42 @@ REVIEWS_HTML = """
     <title>리뷰온도 — {{ mall_id }}</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, sans-serif; background: #f5f5f5; color: #222; }
-        .header { background: #fff; padding: 20px 24px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; justify-content: space-between; }
-        .header h1 { font-size: 18px; font-weight: 700; }
-        .header a { font-size: 13px; color: #888; text-decoration: none; }
-        .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 20px 24px; }
-        .card { background: #fff; border-radius: 10px; padding: 16px; text-align: center; border-top: 4px solid; }
-        .card .count { font-size: 32px; font-weight: 700; }
-        .card .label { font-size: 12px; color: #666; margin-top: 4px; }
-        .card.blue { border-color: #4488FF; } .card.blue .count { color: #4488FF; }
-        .card.green { border-color: #44AA44; } .card.green .count { color: #44AA44; }
-        .card.yellow { border-color: #FFA500; } .card.yellow .count { color: #FFA500; }
-        .card.red { border-color: #FF4444; } .card.red .count { color: #FF4444; }
-        .list { padding: 0 24px 40px; }
-        .list h2 { font-size: 15px; color: #555; margin-bottom: 12px; }
-        .review { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 10px; border-left: 4px solid; }
-        .review .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; color: #fff; margin-bottom: 8px; }
-        .review .content { font-size: 14px; line-height: 1.6; color: #333; }
-        .review .reason { font-size: 12px; color: #999; margin-top: 6px; }
-        .review .meta { font-size: 11px; color: #bbb; margin-top: 4px; }
-        .empty { text-align: center; padding: 60px 20px; color: #aaa; }
-        .empty p { margin-top: 8px; font-size: 14px; }
+        body { font-family: -apple-system, sans-serif; background: #f5f6f8; color: #1a1a1a; }
+
+        .header { background: #fff; padding: 16px 20px; border-bottom: 1px solid #eee; display: flex; align-items: center; justify-content: space-between; }
+        .header h1 { font-size: 17px; font-weight: 700; }
+        .header a { font-size: 13px; color: #999; text-decoration: none; }
+
+        .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 16px 20px; }
+        .card { background: #fff; border-radius: 12px; padding: 14px 10px; text-align: center; }
+        .card .count { font-size: 28px; font-weight: 800; }
+        .card .label { font-size: 11px; color: #888; margin-top: 3px; }
+        .card.blue .count { color: #4488FF; }
+        .card.green .count { color: #44AA44; }
+        .card.yellow .count { color: #F59E0B; }
+        .card.red .count { color: #EF4444; }
+
+        .list { padding: 0 20px 40px; }
+        .section-title { font-size: 13px; font-weight: 600; color: #888; margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+        .review { background: #fff; border-radius: 12px; padding: 14px 16px; margin-bottom: 8px; }
+        .review-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .badge { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; color: #fff; }
+        .meta { font-size: 11px; color: #bbb; margin-left: auto; }
+
+        .summary-text { font-size: 15px; font-weight: 600; color: #1a1a1a; line-height: 1.5; }
+        .original { margin-top: 8px; }
+        .original summary { font-size: 11px; color: #bbb; cursor: pointer; user-select: none; }
+        .original-text { font-size: 13px; color: #aaa; line-height: 1.6; margin-top: 6px; }
+        .original-text.blurred { filter: blur(4px); cursor: pointer; }
+        .original-text.blurred::after { content: '클릭하면 원문을 볼 수 있습니다'; display: block; text-align: center; font-size: 11px; color: #999; filter: blur(0); margin-top: 4px; }
+
+        .empty { text-align: center; padding: 60px 20px; color: #bbb; font-size: 14px; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>리뷰온도 — {{ mall_id }}</h1>
+        <h1>{{ mall_id }} 리뷰 현황</h1>
         <a href="/">다른 쇼핑몰</a>
     </div>
 
@@ -69,25 +79,34 @@ REVIEWS_HTML = """
 
     <div class="list">
         {% if reviews %}
-            <h2>전체 리뷰 {{ total }}개</h2>
-            {% for r in reviews %}
-            {% set c = r.classification %}
-            <div class="review" style="border-color: {{ c.color }}">
-                <span class="badge" style="background: {{ c.color }}">{{ c.label }}</span>
-                <div class="content">{{ r.get('content', '') }}</div>
-                {% if c.reason %}
-                <div class="reason">{{ c.reason }}</div>
-                {% endif %}
-                <div class="meta">{{ r.get('writer', {}).get('name', '') }} · {{ r.get('created_date', '')[:10] }}</div>
+        <div class="section-title">전체 {{ total }}건</div>
+        {% for r in reviews %}
+        {% set c = r.classification %}
+        <div class="review">
+            <div class="review-top">
+                <span class="badge" style="background:{{ c.color }}">{{ c.label }}</span>
+                <span class="meta">{{ r.get('writer', {}).get('name', '') }} · {{ r.get('created_date', '')[:10] }}</span>
             </div>
-            {% endfor %}
+            <div class="summary-text">{{ c.get('summary', '') }}</div>
+            {% if c.grade == 'red' %}
+            <details class="original">
+                <summary>원문 보기</summary>
+                <div class="original-text blurred">{{ r.get('content', '') }}</div>
+            </details>
+            {% else %}
+            <div class="original-text" style="margin-top:8px">{{ r.get('content', '') }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
         {% else %}
-            <div class="empty">
-                <div style="font-size: 48px;">📭</div>
-                <p>등록된 리뷰가 없습니다</p>
-            </div>
+        <div class="empty">등록된 리뷰가 없습니다</div>
         {% endif %}
     </div>
+    <script>
+        document.querySelectorAll('.original-text.blurred').forEach(el => {
+            el.addEventListener('click', () => el.classList.remove('blurred'));
+        });
+    </script>
 </body>
 </html>
 """
@@ -185,6 +204,18 @@ def reviews():
         reviews=classified,
         total=len(raw_reviews)
     )
+
+
+@app.route("/preview")
+def preview():
+    fake = [
+        {"content": "배송도 빠르고 제품 퀄리티 너무 좋아요! 재구매 의사 있습니다", "writer": {"name": "김**"}, "created_date": "2026-05-10", "classification": {"grade": "blue", "label": "긍정", "summary": "제품 만족, 재구매 의사", "color": "#4488FF"}},
+        {"content": "포장 상태가 불량으로 왔고 제품에 스크래치가 있었습니다. 교환 원합니다", "writer": {"name": "이**"}, "created_date": "2026-05-09", "classification": {"grade": "green", "label": "진짜 불만", "summary": "불량 포장으로 인한 교환 요청", "color": "#44AA44"}},
+        {"content": "배송이 너무 늦어요!!! 다신 안 삽니다 진짜 최악이에요", "writer": {"name": "박**"}, "created_date": "2026-05-08", "classification": {"grade": "yellow", "label": "감정적 불만", "summary": "배송 속도 개선 요청", "color": "#F59E0B"}},
+        {"content": "이거 사기예요 환불해주세요 고소할겁니다", "writer": {"name": "최**"}, "created_date": "2026-05-07", "classification": {"grade": "red", "label": "악성 의심", "summary": "대응 불필요", "color": "#EF4444"}},
+    ]
+    counts = {"blue": 1, "green": 1, "yellow": 1, "red": 1}
+    return render_template_string(REVIEWS_HTML, mall_id="미리보기", counts=counts, reviews=fake, total=4)
 
 
 if __name__ == "__main__":
