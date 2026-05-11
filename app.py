@@ -10,6 +10,88 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key")
 
 
+REVIEWS_HTML = """
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>리뷰온도 — {{ mall_id }}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, sans-serif; background: #f5f5f5; color: #222; }
+        .header { background: #fff; padding: 20px 24px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; justify-content: space-between; }
+        .header h1 { font-size: 18px; font-weight: 700; }
+        .header a { font-size: 13px; color: #888; text-decoration: none; }
+        .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 20px 24px; }
+        .card { background: #fff; border-radius: 10px; padding: 16px; text-align: center; border-top: 4px solid; }
+        .card .count { font-size: 32px; font-weight: 700; }
+        .card .label { font-size: 12px; color: #666; margin-top: 4px; }
+        .card.blue { border-color: #4488FF; } .card.blue .count { color: #4488FF; }
+        .card.green { border-color: #44AA44; } .card.green .count { color: #44AA44; }
+        .card.yellow { border-color: #FFA500; } .card.yellow .count { color: #FFA500; }
+        .card.red { border-color: #FF4444; } .card.red .count { color: #FF4444; }
+        .list { padding: 0 24px 40px; }
+        .list h2 { font-size: 15px; color: #555; margin-bottom: 12px; }
+        .review { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 10px; border-left: 4px solid; }
+        .review .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; color: #fff; margin-bottom: 8px; }
+        .review .content { font-size: 14px; line-height: 1.6; color: #333; }
+        .review .reason { font-size: 12px; color: #999; margin-top: 6px; }
+        .review .meta { font-size: 11px; color: #bbb; margin-top: 4px; }
+        .empty { text-align: center; padding: 60px 20px; color: #aaa; }
+        .empty p { margin-top: 8px; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>리뷰온도 — {{ mall_id }}</h1>
+        <a href="/">다른 쇼핑몰</a>
+    </div>
+
+    <div class="summary">
+        <div class="card blue">
+            <div class="count">{{ counts.blue }}</div>
+            <div class="label">긍정</div>
+        </div>
+        <div class="card green">
+            <div class="count">{{ counts.green }}</div>
+            <div class="label">진짜 불만</div>
+        </div>
+        <div class="card yellow">
+            <div class="count">{{ counts.yellow }}</div>
+            <div class="label">감정적 불만</div>
+        </div>
+        <div class="card red">
+            <div class="count">{{ counts.red }}</div>
+            <div class="label">악성 의심</div>
+        </div>
+    </div>
+
+    <div class="list">
+        {% if reviews %}
+            <h2>전체 리뷰 {{ total }}개</h2>
+            {% for r in reviews %}
+            {% set c = r.classification %}
+            <div class="review" style="border-color: {{ c.color }}">
+                <span class="badge" style="background: {{ c.color }}">{{ c.label }}</span>
+                <div class="content">{{ r.get('content', '') }}</div>
+                {% if c.reason %}
+                <div class="reason">{{ c.reason }}</div>
+                {% endif %}
+                <div class="meta">{{ r.get('writer', {}).get('name', '') }} · {{ r.get('created_date', '')[:10] }}</div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="empty">
+                <div style="font-size: 48px;">📭</div>
+                <p>등록된 리뷰가 없습니다</p>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
+
 MAIN_HTML = """
 <!DOCTYPE html>
 <html lang="ko">
@@ -97,16 +179,12 @@ def reviews():
     raw_reviews = data.get("articles", [])
     classified, counts = classify_reviews(raw_reviews)
 
-    return jsonify({
-        "요약": {
-            "파랑(긍정)": counts["blue"],
-            "초록(진짜불만)": counts["green"],
-            "노랑(감정적불만)": counts["yellow"],
-            "빨강(악성의심)": counts["red"],
-        },
-        "리뷰수": len(raw_reviews),
-        "리뷰목록": classified
-    })
+    return render_template_string(REVIEWS_HTML,
+        mall_id=mall_id,
+        counts=counts,
+        reviews=classified,
+        total=len(raw_reviews)
+    )
 
 
 if __name__ == "__main__":
