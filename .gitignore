@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+*.png
+oauth_test.py
+oauth_direct.py
+update_redirect.py
+setup_shop.py
+/tmp/
