@@ -2,3 +2,9 @@ flask
 python-dotenv
 requests
 gunicorn
+
+# 자동매매 트레이딩
+yfinance
+pandas
+numpy
+# FinanceDataReader  # 한국주식 가격: pip install finance-datareader (별도 설치)
