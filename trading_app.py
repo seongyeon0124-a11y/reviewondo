@@ -9,11 +9,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from trading.backtest import run_backtest
 from trading.broker.paper import (
-    get_cash, get_portfolio_value, get_positions_with_pnl,
-    get_trade_history, init_db, reset_portfolio, execute_sell,
+    execute_sell, get_cash, get_portfolio_value, get_positions_with_pnl,
+    get_trade_history, init_db, reset_portfolio,
 )
-from trading.config import INITIAL_CAPITAL
+from trading.config import INITIAL_CAPITAL, WATCHLIST_KR, WATCHLIST_US
 from trading.scheduler import run_cycle
 from trading.strategy.signals import generate_signal, scan_all
 
@@ -110,6 +111,7 @@ DASHBOARD_HTML = r"""
   <h1>AutoTrader</h1>
   <span class="badge badge-paper">PAPER</span>
   <a href="/">리뷰온도</a>
+  <a href="/trading/backtest" style="color:var(--yellow)">📊 백테스트</a>
   <span style="margin-left:auto;color:var(--muted);font-size:11px">마지막 갱신: {{ now }}</span>
 </div>
 
@@ -377,6 +379,355 @@ def manual_sell():
 def api_reset():
     reset_portfolio()
     return jsonify({"ok": True})
+
+
+BACKTEST_HTML = r"""
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>백테스트 — AutoTrader</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:#0d1117;--surface:#161b22;--border:#21262d;
+    --text:#e6edf3;--muted:#8b949e;
+    --green:#3fb950;--red:#f85149;--blue:#58a6ff;--yellow:#d29922;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'SF Mono','Fira Code',ui-monospace,monospace;font-size:13px}
+  .topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:16px}
+  .topbar h1{font-size:15px;font-weight:700;color:var(--blue)}
+  .topbar a{color:var(--muted);text-decoration:none;font-size:12px}
+  .topbar a:hover{color:var(--text)}
+  .badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
+  .badge-bt{background:#1e2a1a;color:var(--yellow)}
+  .main{max-width:1100px;margin:0 auto;padding:20px}
+
+  /* config card */
+  .config-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:20px}
+  .config-card h2{font-size:13px;font-weight:700;margin-bottom:14px;color:var(--yellow)}
+  .form-row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end}
+  .form-group{display:flex;flex-direction:column;gap:6px}
+  .form-group label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+  select,input[type=number]{background:#0d1117;border:1px solid var(--border);color:var(--text);
+    padding:7px 10px;border-radius:6px;font-size:12px;font-family:inherit}
+  select:focus,input:focus{outline:none;border-color:var(--blue)}
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 18px;border-radius:6px;
+    font-size:12px;font-weight:600;border:none;cursor:pointer;text-decoration:none}
+  .btn-run{background:var(--yellow);color:#000}
+  .btn-run:hover{opacity:.85}
+  .btn-ghost{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+
+  /* KPI */
+  .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+  @media(max-width:700px){.kpi-row{grid-template-columns:repeat(2,1fr)}}
+  .kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .kpi .label{font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+  .kpi .value{font-size:24px;font-weight:800}
+  .kpi .sub{font-size:11px;color:var(--muted);margin-top:4px}
+  .pos{color:var(--green)}.neg{color:var(--red)}.neu{color:var(--blue)}.warn{color:var(--yellow)}
+
+  /* section */
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:20px}
+  .section-header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+  .section-title{font-size:13px;font-weight:700}
+  .chart-wrap{padding:16px;position:relative;height:280px}
+
+  /* table */
+  table{width:100%;border-collapse:collapse}
+  th{padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);border-bottom:1px solid var(--border);
+    font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+  td{padding:9px 12px;border-bottom:1px solid var(--border);font-size:12px}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:rgba(255,255,255,.03)}
+  .empty{text-align:center;padding:30px;color:var(--muted)}
+
+  .act-buy{background:rgba(63,185,80,.15);color:var(--green);padding:2px 8px;border-radius:4px}
+  .act-sell{background:rgba(248,81,73,.15);color:var(--red);padding:2px 8px;border-radius:4px}
+
+  /* spinner */
+  #overlay{display:none;position:fixed;inset:0;background:rgba(13,17,23,.8);z-index:50;
+    justify-content:center;align-items:center;flex-direction:column;gap:14px}
+  #overlay.show{display:flex}
+  .loader{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--yellow);
+    border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #overlay p{color:var(--muted);font-size:12px}
+
+  /* results hidden by default */
+  #results{display:none}
+  #error-box{display:none;background:rgba(248,81,73,.1);border:1px solid var(--red);
+    border-radius:8px;padding:14px;margin-bottom:16px;color:var(--red);font-size:12px}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>AutoTrader</h1>
+  <span class="badge badge-bt">BACKTEST</span>
+  <a href="/trading">대시보드</a>
+  <a href="/">리뷰온도</a>
+</div>
+
+<div class="main">
+
+  <!-- 설정 카드 -->
+  <div class="config-card">
+    <h2>📊 백테스트 설정</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label>기간</label>
+        <select id="period">
+          <option value="180">6개월</option>
+          <option value="365" selected>1년</option>
+          <option value="730">2년</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>시장</label>
+        <select id="market">
+          <option value="US">미국 (US)</option>
+          <option value="KR">한국 (KR)</option>
+          <option value="ALL">전체</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>신호 체크 주기</label>
+        <select id="freq">
+          <option value="W-FRI" selected>매주 금요일</option>
+          <option value="ME">매월 말</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>초기 자본금</label>
+        <input type="number" id="capital" value="{{ initial_capital }}" min="1" step="1" style="width:110px">
+      </div>
+      <div class="form-group">
+        <label>정치인 신호</label>
+        <select id="use_pol">
+          <option value="1" selected>사용</option>
+          <option value="0">미사용</option>
+        </select>
+      </div>
+      <button class="btn btn-run" onclick="runBacktest()">▶ 실행</button>
+    </div>
+  </div>
+
+  <div id="error-box"></div>
+
+  <!-- 결과 -->
+  <div id="results">
+
+    <!-- KPI -->
+    <div class="kpi-row" id="kpi-row"></div>
+
+    <!-- 수익 곡선 -->
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">📈 포트폴리오 수익 곡선</span>
+        <span id="bt-period" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="equityChart"></canvas>
+      </div>
+    </div>
+
+    <!-- 거래 내역 -->
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">📋 시뮬레이션 거래 내역</span>
+        <span id="trade-summary" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <table>
+        <thead>
+          <tr><th>날짜</th><th>종목</th><th>시장</th><th>액션</th><th>체결가</th><th>손익</th><th>사유</th></tr>
+        </thead>
+        <tbody id="trade-tbody"></tbody>
+      </table>
+    </div>
+
+  </div><!-- /results -->
+</div><!-- /main -->
+
+<!-- 로딩 오버레이 -->
+<div id="overlay">
+  <div class="loader"></div>
+  <p id="overlay-msg">데이터 다운로드 중... (첫 실행 시 1~2분 소요)</p>
+</div>
+
+<script>
+let equityChart = null;
+
+async function runBacktest() {
+  const overlay = document.getElementById('overlay');
+  const errBox  = document.getElementById('error-box');
+  errBox.style.display = 'none';
+  overlay.classList.add('show');
+
+  const msgs = [
+    '데이터 다운로드 중...',
+    '신호 계산 중...',
+    '거래 시뮬레이션 중...',
+    '성과 지표 산출 중...',
+  ];
+  let mi = 0;
+  const mt = setInterval(() => {
+    document.getElementById('overlay-msg').textContent = msgs[mi++ % msgs.length];
+  }, 2500);
+
+  try {
+    const resp = await fetch('/trading/backtest/run', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        period:    parseInt(document.getElementById('period').value),
+        market:    document.getElementById('market').value,
+        freq:      document.getElementById('freq').value,
+        capital:   parseFloat(document.getElementById('capital').value),
+        use_pol:   document.getElementById('use_pol').value === '1',
+      })
+    });
+    const data = await resp.json();
+    clearInterval(mt);
+    overlay.classList.remove('show');
+
+    if (data.error) {
+      errBox.textContent = '오류: ' + data.error;
+      errBox.style.display = 'block';
+      return;
+    }
+    renderResults(data);
+  } catch(e) {
+    clearInterval(mt);
+    overlay.classList.remove('show');
+    errBox.textContent = '오류: ' + e;
+    errBox.style.display = 'block';
+  }
+}
+
+function renderResults(d) {
+  document.getElementById('results').style.display = 'block';
+
+  // KPI
+  const ret   = d.total_return;
+  const dd    = d.max_drawdown;
+  const kpis = [
+    { label:'총 수익률', value:(ret>=0?'+':'')+ret+'%', sub:`최종 ${d.final_value.toFixed(2)} / 초기 ${d.initial_capital}`, cls: ret>=0?'pos':'neg' },
+    { label:'최대 낙폭 (MDD)', value:dd.toFixed(1)+'%', sub:'고점 대비 최대 하락', cls: dd > -15 ? 'warn' : 'neg' },
+    { label:'샤프 비율', value:d.sharpe_ratio.toFixed(2), sub:'주간 수익률 기준 (>1.0 양호)', cls: d.sharpe_ratio>=1?'pos':d.sharpe_ratio>=0?'warn':'neg' },
+    { label:'승률', value:d.win_rate.toFixed(1)+'%', sub:`${d.sell_count}번 매도 중 승리`, cls: d.win_rate>=55?'pos':d.win_rate>=45?'warn':'neg' },
+    { label:'연간화 수익률', value:(d.annualized_return>=0?'+':'')+d.annualized_return.toFixed(1)+'%', sub:`${d.period_days}일 백테스트 기준`, cls: d.annualized_return>=0?'pos':'neg' },
+    { label:'프로핏 팩터', value:d.profit_factor, sub:'총수익/총손실 (>1.5 양호)', cls: parseFloat(d.profit_factor)>=1.5?'pos':parseFloat(d.profit_factor)>=1?'warn':'neg' },
+    { label:'총 거래 수', value:d.trade_count+'건', sub:`매도 ${d.sell_count}건`, cls:'neu' },
+    { label:'평균 손익', value:`W:+${d.avg_win.toFixed(3)} / L:${d.avg_loss.toFixed(3)}`, sub:'건당 평균 이익 / 손실', cls:'neu' },
+  ];
+  document.getElementById('kpi-row').style.gridTemplateColumns = 'repeat(4,1fr)';
+  document.getElementById('kpi-row').innerHTML = kpis.map(k=>`
+    <div class="kpi">
+      <div class="label">${k.label}</div>
+      <div class="value ${k.cls}">${k.value}</div>
+      <div class="sub">${k.sub}</div>
+    </div>`).join('');
+
+  document.getElementById('bt-period').textContent = `${d.period_days}일 백테스트`;
+
+  // 수익 곡선 차트
+  const labels = d.equity_curve.map(e => e.date);
+  const values = d.equity_curve.map(e => e.value);
+  if (equityChart) equityChart.destroy();
+  const ctx = document.getElementById('equityChart').getContext('2d');
+  equityChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: '포트폴리오 가치',
+        data: values,
+        borderColor: '#58a6ff',
+        backgroundColor: 'rgba(88,166,255,.08)',
+        borderWidth: 2,
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+      }, {
+        label: '초기 자본금',
+        data: Array(labels.length).fill(d.initial_capital),
+        borderColor: '#21262d',
+        borderDash: [4,4],
+        borderWidth: 1,
+        pointRadius: 0,
+        fill: false,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend:{ labels:{ color:'#8b949e', font:{size:11} } } },
+      scales: {
+        x: { ticks:{ color:'#8b949e', maxTicksLimit:10, font:{size:10} }, grid:{ color:'#21262d' } },
+        y: { ticks:{ color:'#8b949e', font:{size:10} }, grid:{ color:'#21262d' } }
+      }
+    }
+  });
+
+  // 거래 내역
+  document.getElementById('trade-summary').textContent = `총 ${d.trades.length}건 (최근 100건 표시)`;
+  const tbody = document.getElementById('trade-tbody');
+  if (!d.trades.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">거래 없음</td></tr>';
+    return;
+  }
+  tbody.innerHTML = d.trades.map(t => {
+    const isBuy = t.action === 'BUY';
+    const pnlHtml = t.pnl ? `<span class="${t.pnl>0?'pos':'neg'}">${t.pnl>0?'+':''}${t.pnl.toFixed(4)}</span>` : '-';
+    return `<tr>
+      <td style="color:var(--muted)">${t.date}</td>
+      <td><strong>${t.ticker}</strong></td>
+      <td>${t.market}</td>
+      <td><span class="${isBuy?'act-buy':'act-sell'}">${t.action}</span></td>
+      <td>${t.price.toFixed(4)}</td>
+      <td>${pnlHtml}</td>
+      <td style="color:var(--muted);font-size:11px">${t.reason}</td>
+    </tr>`;
+  }).join('');
+}
+</script>
+</body>
+</html>
+"""
+
+
+@app.route("/trading/backtest")
+def backtest_page():
+    return render_template_string(BACKTEST_HTML, initial_capital=INITIAL_CAPITAL)
+
+
+@app.route("/trading/backtest/run", methods=["POST"])
+def api_backtest_run():
+    body = request.get_json(silent=True) or {}
+    period = int(body.get("period", 365))
+    market = body.get("market", "US")
+    freq = body.get("freq", "W-FRI")
+    capital = float(body.get("capital", INITIAL_CAPITAL))
+    use_pol = bool(body.get("use_pol", True))
+
+    if market == "US":
+        tickers = [(t.strip(), "US") for t in WATCHLIST_US]
+    elif market == "KR":
+        tickers = [(t.strip(), "KR") for t in WATCHLIST_KR]
+    else:
+        tickers = [(t.strip(), "US") for t in WATCHLIST_US] + \
+                  [(t.strip(), "KR") for t in WATCHLIST_KR]
+
+    result = run_backtest(
+        tickers_markets=tickers,
+        period_days=period,
+        initial_capital=capital,
+        freq=freq,
+        use_politician=use_pol,
+    )
+    return jsonify(result)
 
 
 if __name__ == "__main__":
