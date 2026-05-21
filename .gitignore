@@ -7,3 +7,4 @@ oauth_direct.py
 update_redirect.py
 setup_shop.py
 /tmp/
+*.db
