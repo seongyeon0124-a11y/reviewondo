@@ -34,10 +34,9 @@ DASHBOARD_HTML = r"""
 <title>AutoTrader — 페이퍼 트레이딩</title>
 <style>
   :root {
-    --bg: #0d1117; --surface: #161b22; --border: #21262d;
-    --text: #e6edf3; --muted: #8b949e;
-    --green: #3fb950; --red: #f85149; --blue: #58a6ff;
-    --yellow: #d29922;
+    --bg:#0d1117; --surface:#161b22; --border:#21262d;
+    --text:#e6edf3; --muted:#8b949e;
+    --green:#3fb950; --red:#f85149; --blue:#58a6ff; --yellow:#d29922;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace; font-size: 13px; }
@@ -102,7 +101,21 @@ DASHBOARD_HTML = r"""
   /* 알림 */
   #toast { position: fixed; bottom: 20px; right: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 18px; font-size: 12px; display: none; z-index: 99; max-width: 320px; }
 
+  /* 탭 */
+  .tabs { display: flex; gap: 2px; margin-bottom: 20px; }
+  .tab  { padding: 9px 22px; border-radius: 8px 8px 0 0; font-size: 13px; font-weight: 700;
+          cursor: pointer; border: 1px solid var(--border); border-bottom: none;
+          background: var(--bg); color: var(--muted); user-select: none; }
+  .tab.active { background: var(--surface); color: var(--text); border-color: var(--border); }
+  .tab-long.active  { color: var(--blue); }
+  .tab-short.active { color: var(--yellow); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
   .breakdown { font-size: 10px; color: var(--muted); }
+  .mode-badge { padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+  .mode-long  { background: rgba(88,166,255,.15); color: var(--blue); }
+  .mode-short { background: rgba(210,153,34,.15);  color: var(--yellow); }
   @media (max-width: 700px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
 </style>
 </head>
@@ -112,208 +125,201 @@ DASHBOARD_HTML = r"""
   <span class="badge badge-paper">PAPER</span>
   <a href="/">리뷰온도</a>
   <a href="/trading/backtest" style="color:var(--yellow)">📊 백테스트</a>
-  <span style="margin-left:auto;color:var(--muted);font-size:11px">마지막 갱신: {{ now }}</span>
+  <span style="margin-left:auto;color:var(--muted);font-size:11px">{{ now }}</span>
 </div>
 
 <div class="main">
 
-  <!-- KPI 카드 -->
-  <div class="kpi-row">
+  <!-- 전체 요약 KPI -->
+  <div class="kpi-row" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
     <div class="kpi">
-      <div class="label">포트폴리오 가치</div>
-      <div class="value neu">{{ "%.2f"|format(portfolio_value) }}</div>
-      <div class="sub">초기자본 {{ "%.2f"|format(initial_capital) }}</div>
+      <div class="label">전체 포트폴리오</div>
+      <div class="value neu">{{ "%.0f"|format(total_value) }}</div>
+      <div class="sub">초기 {{ "%.0f"|format(initial_capital) }}</div>
     </div>
     <div class="kpi">
-      <div class="label">총 손익 (PnL)</div>
-      <div class="value {% if pnl >= 0 %}pos{% else %}neg{% endif %}">
-        {% if pnl >= 0 %}+{% endif %}{{ "%.2f"|format(pnl) }}
+      <div class="label">전체 손익</div>
+      <div class="value {% if total_pnl >= 0 %}pos{% else %}neg{% endif %}">
+        {% if total_pnl >= 0 %}+{% endif %}{{ "%.0f"|format(total_pnl) }}
       </div>
-      <div class="sub {% if pnl_pct >= 0 %}pos{% else %}neg{% endif %}">
-        {% if pnl_pct >= 0 %}+{% endif %}{{ "%.1f"|format(pnl_pct) }}%
+      <div class="sub {% if total_pnl_pct >= 0 %}pos{% else %}neg{% endif %}">
+        {% if total_pnl_pct >= 0 %}+{% endif %}{{ "%.1f"|format(total_pnl_pct) }}%
       </div>
     </div>
     <div class="kpi">
-      <div class="label">가용 현금</div>
-      <div class="value">{{ "%.2f"|format(cash) }}</div>
-      <div class="sub">{{ "%.0f"|format(cash / portfolio_value * 100) if portfolio_value > 0 else 0 }}% 현금 비중</div>
+      <div class="label">장기 가치 <span class="mode-badge mode-long">LONG</span></div>
+      <div class="value neu">{{ "%.0f"|format(long.value) }}</div>
+      <div class="sub">현금 {{ "%.0f"|format(long.cash) }}</div>
     </div>
     <div class="kpi">
-      <div class="label">보유 종목 수</div>
-      <div class="value">{{ positions|length }}</div>
-      <div class="sub">총 거래 {{ trade_count }}건</div>
+      <div class="label">단타 가치 <span class="mode-badge mode-short">SHORT</span></div>
+      <div class="value neu">{{ "%.0f"|format(short.value) }}</div>
+      <div class="sub">현금 {{ "%.0f"|format(short.cash) }}</div>
     </div>
   </div>
 
-  <!-- 액션 버튼 -->
-  <div class="action-bar">
-    <button class="btn btn-primary" onclick="runCycle()">
-      <span class="spinner" id="cycle-spin"></span>
-      🔍 신호 스캔 + 자동 매매
-    </button>
-    <button class="btn btn-ghost" onclick="runScan()">
-      📡 신호만 스캔
-    </button>
-    <button class="btn btn-danger btn-sm" onclick="confirmReset()" style="margin-left:auto">
-      초기화
-    </button>
+  <!-- 탭 -->
+  <div class="tabs">
+    <div class="tab tab-long active"  onclick="switchTab('long')">📈 장기 보유 (LONG)</div>
+    <div class="tab tab-short"        onclick="switchTab('short')">⚡ 단타 (SHORT)</div>
   </div>
 
-  <!-- 신호 스캐너 -->
-  <div class="section" id="signal-section" style="display:none">
-    <div class="section-header">
-      <span class="section-title">📡 신호 스캐너</span>
+  <!-- ── 장기 탭 ── -->
+  <div class="tab-panel active" id="panel-long">
+    <div class="action-bar">
+      <button class="btn btn-primary" onclick="runCycle('LONG')">
+        <span class="spinner" id="spin-long"></span> 🔍 장기 스캔 + 매매
+      </button>
+      <button class="btn btn-ghost" onclick="runScan('LONG')">📡 신호만 스캔</button>
+      <button class="btn btn-danger btn-sm" onclick="confirmReset('LONG')" style="margin-left:auto">초기화</button>
     </div>
-    <table>
-      <thead>
-        <tr><th>종목</th><th>시장</th><th>액션</th><th>점수</th><th>정치인</th><th>뉴스</th><th>기술적</th></tr>
-      </thead>
-      <tbody id="signal-tbody"></tbody>
-    </table>
-  </div>
-
-  <!-- 보유 포지션 -->
-  <div class="section">
-    <div class="section-header">
-      <span class="section-title">💼 보유 포지션</span>
+    <div class="section" id="sig-long" style="display:none">
+      <div class="section-header"><span class="section-title">📡 장기 신호</span></div>
+      <table><thead><tr><th>종목</th><th>시장</th><th>액션</th><th>점수</th><th>정치인</th><th>뉴스</th><th>기술</th></tr></thead>
+      <tbody id="sig-long-body"></tbody></table>
     </div>
-    {% if positions %}
-    <table>
-      <thead>
-        <tr><th>종목</th><th>시장</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가손익</th><th>수익률</th><th></th></tr>
-      </thead>
-      <tbody>
-        {% for p in positions %}
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">💼 장기 포지션</span>
+        <span style="font-size:11px;color:var(--muted)">손절 -15% / 익절 없음 / 월 1회 체크</span>
+      </div>
+      {% if long.positions %}
+      <table><thead><tr><th>종목</th><th>시장</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가손익</th><th>수익률</th><th></th></tr></thead>
+      <tbody>{% for p in long.positions %}
         <tr>
-          <td><strong>{{ p.ticker }}</strong></td>
-          <td>{{ p.market }}</td>
-          <td>{{ "%.4f"|format(p.shares) }}</td>
-          <td>{{ "%.4f"|format(p.avg_cost) }}</td>
+          <td><strong>{{ p.ticker }}</strong></td><td>{{ p.market }}</td>
+          <td>{{ "%.4f"|format(p.shares) }}</td><td>{{ "%.4f"|format(p.avg_cost) }}</td>
           <td>{{ "%.4f"|format(p.current_price) }}</td>
-          <td class="{% if p.pnl >= 0 %}pos{% else %}neg{% endif %}">
-            {% if p.pnl >= 0 %}+{% endif %}{{ "%.4f"|format(p.pnl) }}
-          </td>
-          <td class="{% if p.pnl_pct >= 0 %}pos{% else %}neg{% endif %}">
-            {% if p.pnl_pct >= 0 %}+{% endif %}{{ p.pnl_pct }}%
-          </td>
-          <td>
-            <form method="post" action="/trading/sell" style="display:inline">
-              <input type="hidden" name="ticker" value="{{ p.ticker }}">
-              <input type="hidden" name="market" value="{{ p.market }}">
-              <button type="submit" class="btn btn-danger btn-sm">수동 매도</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <div class="empty">보유 포지션 없음 — "신호 스캔 + 자동 매매"를 실행하세요</div>
-    {% endif %}
+          <td class="{% if p.pnl>=0 %}pos{% else %}neg{% endif %}">{% if p.pnl>=0 %}+{% endif %}{{ "%.2f"|format(p.pnl) }}</td>
+          <td class="{% if p.pnl_pct>=0 %}pos{% else %}neg{% endif %}">{% if p.pnl_pct>=0 %}+{% endif %}{{ p.pnl_pct }}%</td>
+          <td><form method="post" action="/trading/sell"><input type="hidden" name="ticker" value="{{ p.ticker }}"><input type="hidden" name="market" value="{{ p.market }}"><input type="hidden" name="mode" value="LONG"><button type="submit" class="btn btn-danger btn-sm">매도</button></form></td>
+        </tr>{% endfor %}
+      </tbody></table>
+      {% else %}<div class="empty">장기 포지션 없음</div>{% endif %}
+    </div>
+    <div class="section">
+      <div class="section-header"><span class="section-title">📋 장기 거래 내역</span></div>
+      {% if long.trades %}<table><thead><tr><th>시각</th><th>종목</th><th>액션</th><th>가격</th><th>손익</th><th>사유</th></tr></thead>
+      <tbody>{% for t in long.trades %}
+        <tr>
+          <td style="color:var(--muted)">{{ t.timestamp[:16] }}</td><td><strong>{{ t.ticker }}</strong></td>
+          <td><span class="{% if t.action=='BUY' %}act-buy{% else %}act-sell{% endif %}">{{ t.action }}</span></td>
+          <td>{{ "%.2f"|format(t.price) }}</td>
+          <td class="{% if t.pnl>0 %}pos{% elif t.pnl<0 %}neg{% endif %}">{% if t.pnl!=0 %}{% if t.pnl>0 %}+{% endif %}{{ "%.2f"|format(t.pnl) }}{% endif %}</td>
+          <td style="color:var(--muted);font-size:11px">{{ t.reason }}</td>
+        </tr>{% endfor %}
+      </tbody></table>
+      {% else %}<div class="empty">거래 없음</div>{% endif %}
+    </div>
   </div>
 
-  <!-- 거래 내역 -->
-  <div class="section">
-    <div class="section-header">
-      <span class="section-title">📋 거래 내역 (최근 50건)</span>
+  <!-- ── 단타 탭 ── -->
+  <div class="tab-panel" id="panel-short">
+    <div class="action-bar">
+      <button class="btn btn-primary" style="background:var(--yellow)" onclick="runCycle('SHORT')">
+        <span class="spinner" id="spin-short"></span> ⚡ 단타 스캔 + 매매
+      </button>
+      <button class="btn btn-ghost" onclick="runScan('SHORT')">📡 신호만 스캔</button>
+      <button class="btn btn-danger btn-sm" onclick="confirmReset('SHORT')" style="margin-left:auto">초기화</button>
     </div>
-    {% if trades %}
-    <table>
-      <thead>
-        <tr><th>시각</th><th>종목</th><th>시장</th><th>액션</th><th>수량</th><th>가격</th><th>손익</th><th>사유</th></tr>
-      </thead>
-      <tbody>
-        {% for t in trades %}
+    <div class="section" id="sig-short" style="display:none">
+      <div class="section-header"><span class="section-title">📡 단타 신호</span></div>
+      <table><thead><tr><th>종목</th><th>시장</th><th>액션</th><th>점수</th><th>정치인</th><th>뉴스</th><th>기술</th></tr></thead>
+      <tbody id="sig-short-body"></tbody></table>
+    </div>
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">⚡ 단타 포지션</span>
+        <span style="font-size:11px;color:var(--muted)">손절 -8% / 익절 +15% / 주 1회 체크</span>
+      </div>
+      {% if short.positions %}
+      <table><thead><tr><th>종목</th><th>시장</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가손익</th><th>수익률</th><th></th></tr></thead>
+      <tbody>{% for p in short.positions %}
         <tr>
-          <td style="color:var(--muted)">{{ t.timestamp[:16] }}</td>
-          <td><strong>{{ t.ticker }}</strong></td>
-          <td>{{ t.market }}</td>
-          <td>
-            <span class="{% if t.action == 'BUY' %}act-buy{% elif t.action == 'SELL' %}act-sell{% endif %}">
-              {{ t.action }}
-            </span>
-          </td>
-          <td>{{ "%.4f"|format(t.shares) }}</td>
-          <td>{{ "%.4f"|format(t.price) }}</td>
-          <td class="{% if t.pnl > 0 %}pos{% elif t.pnl < 0 %}neg{% endif %}">
-            {% if t.pnl != 0 %}{% if t.pnl > 0 %}+{% endif %}{{ "%.4f"|format(t.pnl) }}{% endif %}
-          </td>
+          <td><strong>{{ p.ticker }}</strong></td><td>{{ p.market }}</td>
+          <td>{{ "%.4f"|format(p.shares) }}</td><td>{{ "%.4f"|format(p.avg_cost) }}</td>
+          <td>{{ "%.4f"|format(p.current_price) }}</td>
+          <td class="{% if p.pnl>=0 %}pos{% else %}neg{% endif %}">{% if p.pnl>=0 %}+{% endif %}{{ "%.2f"|format(p.pnl) }}</td>
+          <td class="{% if p.pnl_pct>=0 %}pos{% else %}neg{% endif %}">{% if p.pnl_pct>=0 %}+{% endif %}{{ p.pnl_pct }}%</td>
+          <td><form method="post" action="/trading/sell"><input type="hidden" name="ticker" value="{{ p.ticker }}"><input type="hidden" name="market" value="{{ p.market }}"><input type="hidden" name="mode" value="SHORT"><button type="submit" class="btn btn-danger btn-sm">매도</button></form></td>
+        </tr>{% endfor %}
+      </tbody></table>
+      {% else %}<div class="empty">단타 포지션 없음</div>{% endif %}
+    </div>
+    <div class="section">
+      <div class="section-header"><span class="section-title">📋 단타 거래 내역</span></div>
+      {% if short.trades %}<table><thead><tr><th>시각</th><th>종목</th><th>액션</th><th>가격</th><th>손익</th><th>사유</th></tr></thead>
+      <tbody>{% for t in short.trades %}
+        <tr>
+          <td style="color:var(--muted)">{{ t.timestamp[:16] }}</td><td><strong>{{ t.ticker }}</strong></td>
+          <td><span class="{% if t.action=='BUY' %}act-buy{% else %}act-sell{% endif %}">{{ t.action }}</span></td>
+          <td>{{ "%.2f"|format(t.price) }}</td>
+          <td class="{% if t.pnl>0 %}pos{% elif t.pnl<0 %}neg{% endif %}">{% if t.pnl!=0 %}{% if t.pnl>0 %}+{% endif %}{{ "%.2f"|format(t.pnl) }}{% endif %}</td>
           <td style="color:var(--muted);font-size:11px">{{ t.reason }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <div class="empty">거래 내역 없음</div>
-    {% endif %}
+        </tr>{% endfor %}
+      </tbody></table>
+      {% else %}<div class="empty">거래 없음</div>{% endif %}
+    </div>
   </div>
 
 </div><!-- /main -->
-
 <div id="toast"></div>
 
 <script>
-function showToast(msg, ok=true) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.style.display = 'block';
-  t.style.borderColor = ok ? '#3fb950' : '#f85149';
-  setTimeout(() => { t.style.display = 'none'; }, 4000);
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector('.tab-' + name).classList.add('active');
+  document.getElementById('panel-' + name).classList.add('active');
 }
 
-async function runCycle() {
-  const spin = document.getElementById('cycle-spin');
+function showToast(msg, ok=true) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  t.style.borderColor = ok ? '#3fb950' : '#f85149';
+  setTimeout(() => t.style.display = 'none', 4000);
+}
+
+async function runCycle(mode) {
+  const spin = document.getElementById('spin-' + mode.toLowerCase());
   spin.style.display = 'inline-block';
   try {
-    const r = await fetch('/trading/run', {method:'POST'});
+    const r    = await fetch('/trading/run?mode=' + mode, {method:'POST'});
     const data = await r.json();
-    const n = data.executed?.length || 0;
-    showToast(`완료! 실행 ${n}건 (SL/TP ${data.sl_tp?.length||0}건)`);
+    showToast(`[${mode}] 완료! 실행 ${data.executed?.length||0}건`);
     setTimeout(() => location.reload(), 1500);
   } catch(e) { showToast('오류: ' + e, false); }
   finally { spin.style.display = 'none'; }
 }
 
-async function runScan() {
+async function runScan(mode) {
   showToast('스캔 중...', true);
   try {
-    const r = await fetch('/trading/scan');
+    const r       = await fetch('/trading/scan?mode=' + mode);
     const signals = await r.json();
-    renderSignals(signals);
-    document.getElementById('signal-section').style.display = 'block';
+    const bodyId  = mode === 'LONG' ? 'sig-long-body' : 'sig-short-body';
+    const secId   = mode === 'LONG' ? 'sig-long'      : 'sig-short';
+    const tbody   = document.getElementById(bodyId);
+    tbody.innerHTML = '';
+    signals.forEach(s => {
+      const col = s.score >= 0.15 ? '#3fb950' : s.score <= -0.15 ? '#f85149' : '#8b949e';
+      const cls = s.action === 'BUY' ? 'act-buy' : s.action === 'SELL' ? 'act-sell' : 'act-hold';
+      tbody.innerHTML += `<tr>
+        <td><strong>${s.ticker}</strong></td><td>${s.market}</td>
+        <td><span class="${cls}">${s.action}</span></td>
+        <td style="color:${col};font-weight:700">${s.score >= 0 ? '+' : ''}${s.score.toFixed(3)}</td>
+        <td class="breakdown">${s.breakdown.politician >= 0 ? '+' : ''}${s.breakdown.politician.toFixed(3)}</td>
+        <td class="breakdown">${s.breakdown.news >= 0 ? '+' : ''}${s.breakdown.news.toFixed(3)}</td>
+        <td class="breakdown">${s.breakdown.technical >= 0 ? '+' : ''}${s.breakdown.technical.toFixed(3)}</td>
+      </tr>`;
+    });
+    document.getElementById(secId).style.display = 'block';
   } catch(e) { showToast('오류: ' + e, false); }
 }
 
-function renderSignals(signals) {
-  const tbody = document.getElementById('signal-tbody');
-  tbody.innerHTML = '';
-  signals.forEach(s => {
-    const score = s.score;
-    const pct = Math.abs(score) / 1.0 * 100;
-    const color = score >= 0.35 ? '#3fb950' : score <= -0.35 ? '#f85149' : '#8b949e';
-    const actCls = s.action === 'BUY' ? 'act-buy' : s.action === 'SELL' ? 'act-sell' : 'act-hold';
-    tbody.innerHTML += `<tr>
-      <td><strong>${s.ticker}</strong></td>
-      <td>${s.market}</td>
-      <td><span class="${actCls}">${s.action}</span></td>
-      <td>
-        <div class="score-bar">
-          <div class="score-track">
-            <div class="score-fill" style="width:${pct}%;background:${color}"></div>
-          </div>
-          <span class="score-num" style="color:${color}">${score >= 0 ? '+' : ''}${score.toFixed(3)}</span>
-        </div>
-      </td>
-      <td class="breakdown">${s.breakdown.politician >= 0 ? '+' : ''}${s.breakdown.politician.toFixed(3)}</td>
-      <td class="breakdown">${s.breakdown.news >= 0 ? '+' : ''}${s.breakdown.news.toFixed(3)}</td>
-      <td class="breakdown">${s.breakdown.technical >= 0 ? '+' : ''}${s.breakdown.technical.toFixed(3)}</td>
-    </tr>`;
-  });
-}
-
-function confirmReset() {
-  if (confirm('포트폴리오를 초기화하시겠습니까? 모든 거래 내역이 삭제됩니다.')) {
-    fetch('/trading/reset', {method:'POST'}).then(() => location.reload());
+function confirmReset(mode) {
+  if (confirm(`[${mode}] 포트폴리오를 초기화하시겠습니까?`)) {
+    fetch('/trading/reset?mode=' + mode, {method:'POST'}).then(() => location.reload());
   }
 }
 </script>
@@ -327,43 +333,52 @@ function confirmReset() {
 @app.route("/trading")
 def dashboard():
     from datetime import datetime
-    portfolio_value = get_portfolio_value()
-    cash = get_cash()
-    positions = get_positions_with_pnl()
-    trades = get_trade_history(50)
-    pnl = portfolio_value - INITIAL_CAPITAL
-    pnl_pct = (pnl / INITIAL_CAPITAL * 100) if INITIAL_CAPITAL > 0 else 0
-    trade_count = len(get_trade_history(9999))
+
+    def _pdata(mode):
+        v = get_portfolio_value(mode)
+        return {
+            "value":     v,
+            "cash":      get_cash(mode),
+            "positions": get_positions_with_pnl(mode),
+            "trades":    get_trade_history(30, mode),
+            "pnl":       v - INITIAL_CAPITAL * (0.60 if mode == "LONG" else 0.40),
+        }
+
+    long_d  = _pdata("LONG")
+    short_d = _pdata("SHORT")
+    total_v = long_d["value"] + short_d["value"]
+    total_pnl = total_v - INITIAL_CAPITAL
+    total_pnl_pct = total_pnl / INITIAL_CAPITAL * 100 if INITIAL_CAPITAL else 0
 
     return render_template_string(
         DASHBOARD_HTML,
-        portfolio_value=portfolio_value,
+        long=long_d, short=short_d,
+        total_value=total_v,
+        total_pnl=total_pnl,
+        total_pnl_pct=round(total_pnl_pct, 2),
         initial_capital=INITIAL_CAPITAL,
-        cash=cash,
-        positions=positions,
-        trades=trades,
-        pnl=pnl,
-        pnl_pct=round(pnl_pct, 2),
-        trade_count=trade_count,
         now=datetime.now().strftime("%Y-%m-%d %H:%M"),
     )
 
 
 @app.route("/trading/run", methods=["POST"])
 def api_run():
-    result = run_cycle()
+    mode = request.args.get("mode", "SHORT").upper()
+    result = run_cycle(mode)
     return jsonify(result)
 
 
 @app.route("/trading/scan")
 def api_scan():
-    signals = scan_all()
+    mode = request.args.get("mode", "SHORT").upper()
+    signals = scan_all(mode)
     return jsonify(signals)
 
 
 @app.route("/trading/signal/<market>/<ticker>")
 def api_signal(market, ticker):
-    sig = generate_signal(ticker.upper(), market.upper())
+    mode = request.args.get("mode", "SHORT").upper()
+    sig = generate_signal(ticker.upper(), market.upper(), mode)
     return jsonify(sig)
 
 
@@ -371,13 +386,15 @@ def api_signal(market, ticker):
 def manual_sell():
     ticker = request.form.get("ticker", "").strip().upper()
     market = request.form.get("market", "US").strip().upper()
-    execute_sell(ticker, market, reason="수동 매도")
+    mode   = request.form.get("mode", "SHORT").strip().upper()
+    execute_sell(ticker, market, reason="수동 매도", mode=mode)
     return redirect(url_for("dashboard"))
 
 
 @app.route("/trading/reset", methods=["POST"])
 def api_reset():
-    reset_portfolio()
+    mode = request.args.get("mode")
+    reset_portfolio(mode.upper() if mode else None)
     return jsonify({"ok": True})
 
 

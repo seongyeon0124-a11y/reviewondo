@@ -3,16 +3,31 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── 자금 설정 ────────────────────────────────────────────────
-INITIAL_CAPITAL    = float(os.getenv("INITIAL_CAPITAL", "100"))
-MAX_POSITION_SIZE  = float(os.getenv("MAX_POSITION_SIZE", "0.25"))   # 종목당 최대 25%
-STOP_LOSS_PCT      = float(os.getenv("STOP_LOSS_PCT", "0.12"))       # 손절: -12% (여유 확대)
-TAKE_PROFIT_PCT    = float(os.getenv("TAKE_PROFIT_PCT", "0.30"))     # 익절: +30% (모멘텀 유지)
+# ── 공통 자금 ────────────────────────────────────────────────
+INITIAL_CAPITAL   = float(os.getenv("INITIAL_CAPITAL", "1000000"))
 
-# ── 신호 임계값 ───────────────────────────────────────────────
-# 기술 신호 범위가 ±0.50으로 확대됨 → 임계값도 함께 조정
-BUY_THRESHOLD      = float(os.getenv("BUY_THRESHOLD", "0.15"))       # 기존 0.35 → 0.15
-SELL_THRESHOLD     = float(os.getenv("SELL_THRESHOLD", "-0.20"))     # 기존 -0.35 → -0.20
+# ── 장기 포트폴리오 설정 (60% 자본 배분) ─────────────────────
+LONG_CAPITAL_RATIO    = float(os.getenv("LONG_CAPITAL_RATIO", "0.60"))
+LONG_MAX_POSITION     = float(os.getenv("LONG_MAX_POSITION", "0.30"))   # 종목당 30%
+LONG_STOP_LOSS        = float(os.getenv("LONG_STOP_LOSS", "0.15"))      # 손절 -15%
+LONG_TAKE_PROFIT      = float(os.getenv("LONG_TAKE_PROFIT", "0.0"))     # 0 = 익절 없음
+LONG_BUY_THRESHOLD    = float(os.getenv("LONG_BUY_THRESHOLD", "0.20"))
+LONG_SELL_THRESHOLD   = float(os.getenv("LONG_SELL_THRESHOLD", "-0.15"))
+
+# ── 단타 포트폴리오 설정 (40% 자본 배분) ─────────────────────
+SHORT_CAPITAL_RATIO   = float(os.getenv("SHORT_CAPITAL_RATIO", "0.40"))
+SHORT_MAX_POSITION    = float(os.getenv("SHORT_MAX_POSITION", "0.20"))  # 종목당 20%
+SHORT_STOP_LOSS       = float(os.getenv("SHORT_STOP_LOSS", "0.08"))     # 손절 -8%
+SHORT_TAKE_PROFIT     = float(os.getenv("SHORT_TAKE_PROFIT", "0.15"))   # 익절 +15%
+SHORT_BUY_THRESHOLD   = float(os.getenv("SHORT_BUY_THRESHOLD", "0.15"))
+SHORT_SELL_THRESHOLD  = float(os.getenv("SHORT_SELL_THRESHOLD", "-0.20"))
+
+# ── 하위 호환 (단타 기본값으로 alias) ─────────────────────────
+MAX_POSITION_SIZE = SHORT_MAX_POSITION
+STOP_LOSS_PCT     = SHORT_STOP_LOSS
+TAKE_PROFIT_PCT   = SHORT_TAKE_PROFIT
+BUY_THRESHOLD     = SHORT_BUY_THRESHOLD
+SELL_THRESHOLD    = SHORT_SELL_THRESHOLD
 
 # ── 감시 종목 ─────────────────────────────────────────────────
 WATCHLIST_US = os.getenv(
@@ -24,9 +39,8 @@ WATCHLIST_KR = os.getenv(
     "WATCHLIST_KR",
     "005930,000660,035420,005380,051910,035720,000270,068270"
 ).split(",")
-# 삼성전자, SK하이닉스, 네이버, 현대차, LG화학, 카카오, 기아, 셀트리온
 
-# ── API 키 (없어도 작동, 있으면 더 정확해짐) ──────────────────
+# ── API 키 ───────────────────────────────────────────────────
 DART_API_KEY = os.getenv("DART_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 

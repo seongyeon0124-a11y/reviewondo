@@ -1,8 +1,8 @@
 """
 트레이딩 사이클 실행기.
-한 번 호출하면: SL/TP 체크 → 신호 스캔 → 매수/매도 실행.
-APScheduler나 cron으로 주기적으로 호출하거나,
-대시보드에서 수동으로 실행할 수 있다.
+
+LONG (장기): 월 1회 체크, 손절 없는 추세 추종
+SHORT (단타): 주 1회 체크, 타이트한 손절/익절
 """
 
 import logging
@@ -13,32 +13,25 @@ from trading.strategy.signals import scan_all
 logger = logging.getLogger(__name__)
 
 
-def run_cycle() -> dict:
+def run_cycle(mode: str = "SHORT") -> dict:
     """
-    1회 트레이딩 사이클 실행.
-    반환:
-      {
-        "sl_tp": [실행된 손절/익절 거래],
-        "signals": [전체 신호 목록],
-        "executed": [신호 기반 실행 거래],
-      }
+    1회 트레이딩 사이클.
+    mode: 'SHORT' (단타, 주 1회) | 'LONG' (장기, 월 1회)
     """
     init_db()
 
-    # 1. 손절 / 익절 체크
-    sl_tp_actions = check_sl_tp()
+    sl_tp_actions = check_sl_tp(mode)
     if sl_tp_actions:
-        logger.info(f"SL/TP 실행: {len(sl_tp_actions)}건")
+        logger.info(f"[{mode}] SL/TP {len(sl_tp_actions)}건")
 
-    # 2. 전체 종목 신호 스캔
-    signals = scan_all()
+    signals  = scan_all(mode)
     executed = []
 
     for sig in signals:
         ticker = sig["ticker"]
         market = sig["market"]
         action = sig["action"]
-        score = sig["score"]
+        score  = sig["score"]
         reason = (
             f"신호 {score:+.3f} "
             f"(정치인{sig['breakdown']['politician']:+.3f} "
@@ -47,12 +40,20 @@ def run_cycle() -> dict:
         )
 
         if action == "BUY":
-            r = execute_buy(ticker, market, reason=reason)
+            r = execute_buy(ticker, market, reason=reason, mode=mode)
             if r["ok"]:
                 executed.append({**r, "score": score})
         elif action == "SELL":
-            r = execute_sell(ticker, market, reason=reason)
+            r = execute_sell(ticker, market, reason=reason, mode=mode)
             if r["ok"]:
                 executed.append({**r, "score": score})
 
-    return {"sl_tp": sl_tp_actions, "signals": signals, "executed": executed}
+    return {"mode": mode, "sl_tp": sl_tp_actions, "signals": signals, "executed": executed}
+
+
+def run_all_cycles() -> dict:
+    """장기 + 단타 동시 실행"""
+    return {
+        "LONG":  run_cycle("LONG"),
+        "SHORT": run_cycle("SHORT"),
+    }
