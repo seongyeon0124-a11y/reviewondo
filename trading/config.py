@@ -22,6 +22,17 @@ SHORT_TAKE_PROFIT     = float(os.getenv("SHORT_TAKE_PROFIT", "0.15"))   # 익절
 SHORT_BUY_THRESHOLD   = float(os.getenv("SHORT_BUY_THRESHOLD", "0.15"))
 SHORT_SELL_THRESHOLD  = float(os.getenv("SHORT_SELL_THRESHOLD", "-0.20"))
 
+# ── 정치인 카피트레이딩 설정 (20% 자본 배분) ─────────────────
+POL_CAPITAL_RATIO     = float(os.getenv("POL_CAPITAL_RATIO", "0.20"))
+POL_MAX_POSITION      = float(os.getenv("POL_MAX_POSITION", "0.25"))    # 종목당 25%
+POL_STOP_LOSS         = float(os.getenv("POL_STOP_LOSS", "0.12"))       # 손절 -12%
+POL_HOLD_DAYS         = int(os.getenv("POL_HOLD_DAYS", "90"))           # 최대 보유일
+POL_SCAN_DAYS         = int(os.getenv("POL_SCAN_DAYS", "30"))           # 최근 N일 공시 스캔
+
+# 자본금 재배분 (LONG 50% / SHORT 30% / POL 20%)
+LONG_CAPITAL_RATIO    = float(os.getenv("LONG_CAPITAL_RATIO", "0.50"))
+SHORT_CAPITAL_RATIO   = float(os.getenv("SHORT_CAPITAL_RATIO", "0.30"))
+
 # ── 하위 호환 (단타 기본값으로 alias) ─────────────────────────
 MAX_POSITION_SIZE = SHORT_MAX_POSITION
 STOP_LOSS_PCT     = SHORT_STOP_LOSS

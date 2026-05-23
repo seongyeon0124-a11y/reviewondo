@@ -15,7 +15,9 @@ from trading.broker.paper import (
     get_trade_history, init_db, reset_portfolio,
 )
 from trading.config import INITIAL_CAPITAL, WATCHLIST_KR, WATCHLIST_US
-from trading.scheduler import run_cycle
+from trading.data.politician import get_all_recent_trades
+from trading.scheduler import run_cycle, run_pol_cycle
+from trading.strategy.pol_strategy import get_pol_buy_candidates
 from trading.strategy.signals import generate_signal, scan_all
 
 app = Flask(__name__)
@@ -156,12 +158,18 @@ DASHBOARD_HTML = r"""
       <div class="value neu">{{ "%.0f"|format(short.value) }}</div>
       <div class="sub">현금 {{ "%.0f"|format(short.cash) }}</div>
     </div>
+    <div class="kpi" style="border-color:rgba(63,185,80,.3)">
+      <div class="label">정치인 카피 <span class="mode-badge" style="background:rgba(63,185,80,.15);color:#3fb950">POL</span></div>
+      <div class="value neu">{{ "%.0f"|format(pol.value) }}</div>
+      <div class="sub">현금 {{ "%.0f"|format(pol.cash) }}</div>
+    </div>
   </div>
 
   <!-- 탭 -->
   <div class="tabs">
-    <div class="tab tab-long active"  onclick="switchTab('long')">📈 장기 보유 (LONG)</div>
-    <div class="tab tab-short"        onclick="switchTab('short')">⚡ 단타 (SHORT)</div>
+    <div class="tab tab-long active"  onclick="switchTab('long')">📈 장기 보유</div>
+    <div class="tab tab-short"        onclick="switchTab('short')">⚡ 단타</div>
+    <div class="tab tab-pol"          onclick="switchTab('pol')" style="color:#3fb950">🏛️ 정치인 따라하기</div>
   </div>
 
   <!-- ── 장기 탭 ── -->
@@ -260,7 +268,90 @@ DASHBOARD_HTML = r"""
       </tbody></table>
       {% else %}<div class="empty">거래 없음</div>{% endif %}
     </div>
-  </div>
+  </div><!-- /panel-short -->
+
+  <!-- ── 정치인 탭 ── -->
+  <div class="tab-panel" id="panel-pol">
+    <div class="action-bar">
+      <button class="btn btn-primary" style="background:#3fb950;color:#000" onclick="runPol()">
+        <span class="spinner" id="spin-pol"></span> 🏛️ 정치인 공시 스캔 + 매매
+      </button>
+      <button class="btn btn-danger btn-sm" onclick="confirmReset('POL')" style="margin-left:auto">초기화</button>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">🏛️ 최신 의회 매매 공시 (최근 30일)</span>
+        <span style="font-size:11px;color:var(--muted)">STOCK Act — 최대 45일 지연 공시</span>
+      </div>
+      {% if pol_feed %}
+      <table><thead><tr><th>날짜</th><th>의원</th><th>원</th><th>종목</th><th>유형</th><th>금액</th></tr></thead>
+      <tbody>{% for t in pol_feed[:30] %}
+        <tr>
+          <td style="color:var(--muted)">{{ t.date }}</td>
+          <td><strong>{{ t.name }}</strong></td>
+          <td style="color:var(--muted);font-size:11px">{{ t.chamber }}</td>
+          <td><strong style="color:var(--blue)">{{ t.ticker }}</strong></td>
+          <td><span class="{% if t.is_buy %}act-buy{% else %}act-sell{% endif %}">{% if t.is_buy %}매수{% else %}매도{% endif %}</span></td>
+          <td style="font-size:11px;color:var(--muted)">{{ t.amount }}</td>
+        </tr>{% endfor %}
+      </tbody></table>
+      {% else %}<div class="empty">정치인 공시 없음 (네트워크 연결 필요)</div>{% endif %}
+    </div>
+
+    {% if pol_candidates %}
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">⭐ 카피트레이딩 후보</span>
+        <span style="font-size:11px;color:var(--muted)">복수 의원 매수 = 신뢰도↑</span>
+      </div>
+      <table><thead><tr><th>종목</th><th>의원 수</th><th>최근 날짜</th><th>신뢰도</th><th>매수 의원</th></tr></thead>
+      <tbody>{% for c in pol_candidates %}
+        <tr>
+          <td><strong style="color:var(--blue)">{{ c.ticker }}</strong></td>
+          <td>{{ c.count }}명</td><td>{{ c.latest_date }}</td>
+          <td><span style="color:#3fb950;font-weight:700">{{ "%.0f"|format(c.confidence*100) }}%</span></td>
+          <td style="font-size:11px;color:var(--muted)">{{ c.politicians[:2]|map(attribute='name')|join(', ') }}</td>
+        </tr>
+      {% endfor %}</tbody></table>
+    </div>
+    {% endif %}
+
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">💼 보유 포지션</span>
+        <span style="font-size:11px;color:var(--muted)">손절 -12% / 90일 자동 청산</span>
+      </div>
+      {% if pol.positions %}
+      <table><thead><tr><th>종목</th><th>진입일</th><th>평균단가</th><th>현재가</th><th>손익</th><th>수익률</th><th></th></tr></thead>
+      <tbody>{% for p in pol.positions %}
+        <tr>
+          <td><strong>{{ p.ticker }}</strong></td>
+          <td style="color:var(--muted)">{{ p.entry_date[:10] }}</td>
+          <td>{{ "%.2f"|format(p.avg_cost) }}</td><td>{{ "%.2f"|format(p.current_price) }}</td>
+          <td class="{% if p.pnl>=0 %}pos{% else %}neg{% endif %}">{% if p.pnl>=0 %}+{% endif %}{{ "%.2f"|format(p.pnl) }}</td>
+          <td class="{% if p.pnl_pct>=0 %}pos{% else %}neg{% endif %}">{% if p.pnl_pct>=0 %}+{% endif %}{{ p.pnl_pct }}%</td>
+          <td><form method="post" action="/trading/sell"><input type="hidden" name="ticker" value="{{ p.ticker }}"><input type="hidden" name="market" value="US"><input type="hidden" name="mode" value="POL"><button type="submit" class="btn btn-danger btn-sm">매도</button></form></td>
+        </tr>{% endfor %}
+      </tbody></table>
+      {% else %}<div class="empty">포지션 없음 — 스캔 시 정치인 매수 감지되면 자동 진입</div>{% endif %}
+    </div>
+
+    <div class="section">
+      <div class="section-header"><span class="section-title">📋 거래 내역</span></div>
+      {% if pol.trades %}<table><thead><tr><th>시각</th><th>종목</th><th>액션</th><th>가격</th><th>손익</th><th>사유</th></tr></thead>
+      <tbody>{% for t in pol.trades %}
+        <tr>
+          <td style="color:var(--muted)">{{ t.timestamp[:16] }}</td><td><strong>{{ t.ticker }}</strong></td>
+          <td><span class="{% if t.action=='BUY' %}act-buy{% else %}act-sell{% endif %}">{{ t.action }}</span></td>
+          <td>{{ "%.2f"|format(t.price) }}</td>
+          <td class="{% if t.pnl>0 %}pos{% elif t.pnl<0 %}neg{% endif %}">{% if t.pnl!=0 %}{% if t.pnl>0 %}+{% endif %}{{ "%.2f"|format(t.pnl) }}{% endif %}</td>
+          <td style="color:var(--muted);font-size:11px">{{ t.reason }}</td>
+        </tr>{% endfor %}
+      </tbody></table>
+      {% else %}<div class="empty">거래 없음</div>{% endif %}
+    </div>
+  </div><!-- /panel-pol -->
 
 </div><!-- /main -->
 <div id="toast"></div>
@@ -317,6 +408,18 @@ async function runScan(mode) {
   } catch(e) { showToast('오류: ' + e, false); }
 }
 
+async function runPol() {
+  const spin = document.getElementById('spin-pol');
+  spin.style.display = 'inline-block';
+  try {
+    const r    = await fetch('/trading/run/pol', {method:'POST'});
+    const data = await r.json();
+    showToast(`[POL] 매수 ${data.executed?.length||0}건, 매도 ${data.sold?.length||0}건`);
+    setTimeout(() => location.reload(), 1500);
+  } catch(e) { showToast('오류: ' + e, false); }
+  finally { spin.style.display = 'none'; }
+}
+
 function confirmReset(mode) {
   if (confirm(`[${mode}] 포트폴리오를 초기화하시겠습니까?`)) {
     fetch('/trading/reset?mode=' + mode, {method:'POST'}).then(() => location.reload());
@@ -346,13 +449,22 @@ def dashboard():
 
     long_d  = _pdata("LONG")
     short_d = _pdata("SHORT")
-    total_v = long_d["value"] + short_d["value"]
+    pol_d   = _pdata("POL")
+    total_v = long_d["value"] + short_d["value"] + pol_d["value"]
     total_pnl = total_v - INITIAL_CAPITAL
     total_pnl_pct = total_pnl / INITIAL_CAPITAL * 100 if INITIAL_CAPITAL else 0
 
+    try:
+        pol_feed       = get_all_recent_trades(days=30)
+        pol_candidates = get_pol_buy_candidates(days=30)
+    except Exception:
+        pol_feed, pol_candidates = [], []
+
     return render_template_string(
         DASHBOARD_HTML,
-        long=long_d, short=short_d,
+        long=long_d, short=short_d, pol=pol_d,
+        pol_feed=pol_feed,
+        pol_candidates=pol_candidates,
         total_value=total_v,
         total_pnl=total_pnl,
         total_pnl_pct=round(total_pnl_pct, 2),
@@ -389,6 +501,12 @@ def manual_sell():
     mode   = request.form.get("mode", "SHORT").strip().upper()
     execute_sell(ticker, market, reason="수동 매도", mode=mode)
     return redirect(url_for("dashboard"))
+
+
+@app.route("/trading/run/pol", methods=["POST"])
+def api_run_pol():
+    result = run_pol_cycle()
+    return jsonify(result)
 
 
 @app.route("/trading/reset", methods=["POST"])

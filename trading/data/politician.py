@@ -115,11 +115,71 @@ def get_politician_signal(ticker: str, days: int = 90) -> float:
     return round(ratio * 0.4 * confidence, 3)
 
 
+def get_all_recent_trades(days: int = 30) -> list[dict]:
+    """
+    전체 의회 의원 최근 거래 반환 (종목 무관).
+    정치인 포트폴리오 직접 따라하기에 사용.
+    """
+    cutoff = datetime.now() - timedelta(days=days)
+    result = []
+
+    for url in [HOUSE_URL, SENATE_URL]:
+        for t in _fetch_json(url):
+            date_str = str(t.get("transaction_date", ""))[:10]
+            try:
+                date = datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if date < cutoff:
+                continue
+
+            ticker = str(t.get("ticker", "")).upper().strip()
+            if not ticker or ticker in ("N/A", "--", ""):
+                continue
+            # 여러 종목 묶음은 첫 번째만 사용
+            ticker = ticker.split("--")[0].split(",")[0].strip()
+            if not ticker:
+                continue
+
+            trade_type = str(t.get("type", "")).lower()
+            is_buy  = "purchase" in trade_type or "buy" in trade_type
+            is_sell = "sale" in trade_type or "sell" in trade_type
+            if not is_buy and not is_sell:
+                continue
+
+            # 금액 파싱 ($15,001 - $50,000 이상만)
+            amount_str = str(t.get("amount", ""))
+            significant = any(
+                kw in amount_str for kw in
+                ["15,001", "50,000", "100,000", "250,000", "500,000", "1,000,000"]
+            )
+
+            result.append({
+                "chamber":     t.get("chamber", "House"),
+                "name":        t.get("representative", ""),
+                "ticker":      ticker,
+                "type":        t.get("type", ""),
+                "is_buy":      is_buy,
+                "is_sell":     is_sell,
+                "amount":      amount_str,
+                "significant": significant,
+                "date":        date_str,
+            })
+
+    # 최신순 정렬, 중복 제거 (같은 날 같은 의원·같은 종목)
+    seen = set()
+    deduped = []
+    for r in sorted(result, key=lambda x: x["date"], reverse=True):
+        key = (r["name"], r["ticker"], r["date"], r["is_buy"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(r)
+
+    return deduped
+
+
 def get_dart_insider_signal(ticker: str, api_key: str) -> float:
-    """
-    DART 주요주주·임원 지분 변동 신호 (한국 주식).
-    api_key 없으면 0 반환.
-    """
+    """DART 주요주주·임원 지분 변동 신호 (한국 주식). api_key 없으면 0 반환."""
     if not api_key:
         return 0.0
     url = "https://opendart.fss.or.kr/api/majorstock.json"

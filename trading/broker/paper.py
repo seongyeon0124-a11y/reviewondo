@@ -12,7 +12,7 @@ from trading.data.prices import get_current_price
 
 logger = logging.getLogger(__name__)
 
-PORTFOLIOS = ("LONG", "SHORT")
+PORTFOLIOS = ("LONG", "SHORT", "POL")
 POS   = "positions"
 TRD   = "trade_log"
 CASH  = "cash_pool"
@@ -55,7 +55,11 @@ def init_db() -> None:
         """)
 
         # 초기 자금 삽입 (없는 경우만)
-        for mode, ratio in [("LONG", config.LONG_CAPITAL_RATIO), ("SHORT", config.SHORT_CAPITAL_RATIO)]:
+        for mode, ratio in [
+            ("LONG",  config.LONG_CAPITAL_RATIO),
+            ("SHORT", config.SHORT_CAPITAL_RATIO),
+            ("POL",   config.POL_CAPITAL_RATIO),
+        ]:
             row = c.execute(f"SELECT amount FROM {CASH} WHERE mode=?", (mode,)).fetchone()
             if not row:
                 c.execute(f"INSERT INTO {CASH} VALUES (?,?)", (mode, config.INITIAL_CAPITAL * ratio))
@@ -109,6 +113,8 @@ def get_positions_with_pnl(mode: str | None = None) -> list[dict]:
 def _cfg(mode: str) -> tuple[float, float, float]:
     if mode == "LONG":
         return config.LONG_MAX_POSITION, config.LONG_STOP_LOSS, config.LONG_TAKE_PROFIT
+    if mode == "POL":
+        return config.POL_MAX_POSITION, config.POL_STOP_LOSS, 0.0  # 익절 없음
     return config.SHORT_MAX_POSITION, config.SHORT_STOP_LOSS, config.SHORT_TAKE_PROFIT
 
 
@@ -236,7 +242,11 @@ def get_trade_history(limit: int = 100, mode: str | None = None) -> list[dict]:
 
 def reset_portfolio(mode: str | None = None) -> None:
     modes  = [mode] if mode else list(PORTFOLIOS)
-    ratios = {"LONG": config.LONG_CAPITAL_RATIO, "SHORT": config.SHORT_CAPITAL_RATIO}
+    ratios = {
+        "LONG":  config.LONG_CAPITAL_RATIO,
+        "SHORT": config.SHORT_CAPITAL_RATIO,
+        "POL":   config.POL_CAPITAL_RATIO,
+    }
     with _conn() as c:
         for m in modes:
             c.execute(f"DELETE FROM {POS} WHERE mode=?", (m,))
