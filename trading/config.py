@@ -52,8 +52,13 @@ WATCHLIST_KR = os.getenv(
 ).split(",")
 
 # ── API 키 ───────────────────────────────────────────────────
-DART_API_KEY = os.getenv("DART_API_KEY", "")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
+DART_API_KEY       = os.getenv("DART_API_KEY", "")
+NEWS_API_KEY       = os.getenv("NEWS_API_KEY", "")
+
+# 가격 데이터 소스 (우선순위: Polygon → TwelveData → AlphaVantage → yfinance)
+POLYGON_API_KEY    = os.getenv("POLYGON_API_KEY", "")    # polygon.io 무료 등록
+TWELVE_DATA_KEY    = os.getenv("TWELVE_DATA_KEY", "")    # twelvedata.com 무료 등록
+ALPHA_VANTAGE_KEY  = os.getenv("ALPHA_VANTAGE_KEY", "")  # alphavantage.co 무료 등록
 
 # ── 저장소 ───────────────────────────────────────────────────
 DB_PATH = os.getenv("TRADING_DB_PATH", "trading.db")

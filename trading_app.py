@@ -16,6 +16,7 @@ from trading.broker.paper import (
 )
 from trading.config import INITIAL_CAPITAL, WATCHLIST_KR, WATCHLIST_US
 from trading.data.politician import get_all_recent_trades
+from trading.data.prices import get_data_source_status
 from trading.scheduler import run_cycle, run_pol_cycle
 from trading.strategy.pol_strategy import get_pol_buy_candidates
 from trading.strategy.signals import generate_signal, scan_all
@@ -24,6 +25,36 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "trading-dev-key")
 
 init_db()
+
+# ── 자동 스케줄러 ─────────────────────────────────────────────
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    _scheduler = BackgroundScheduler(timezone="Asia/Seoul", daemon=True)
+
+    # 단타: 매주 금요일 오후 3시 (미국 장 마감 전)
+    _scheduler.add_job(
+        lambda: run_cycle("SHORT"),
+        CronTrigger(day_of_week="fri", hour=15, minute=0),
+        id="short_cycle", replace_existing=True,
+    )
+    # 장기: 매월 첫 번째 월요일 오전 9시
+    _scheduler.add_job(
+        lambda: run_cycle("LONG"),
+        CronTrigger(day_of_week="mon", hour=9, minute=0, week="1"),
+        id="long_cycle", replace_existing=True,
+    )
+    # 정치인 카피: 매일 오전 8시 (공시 수시 확인)
+    _scheduler.add_job(
+        run_pol_cycle,
+        CronTrigger(hour=8, minute=0),
+        id="pol_cycle", replace_existing=True,
+    )
+
+    _scheduler.start()
+except ImportError:
+    _scheduler = None
 
 # ─────────────────────────────── HTML ────────────────────────────────
 
@@ -127,7 +158,12 @@ DASHBOARD_HTML = r"""
   <span class="badge badge-paper">PAPER</span>
   <a href="/">리뷰온도</a>
   <a href="/trading/backtest" style="color:var(--yellow)">📊 백테스트</a>
-  <span style="margin-left:auto;color:var(--muted);font-size:11px">{{ now }}</span>
+  <span style="margin-left:auto;font-size:11px">
+    {% for src, status in data_sources.items() %}
+      <span title="{{ src }}" style="margin-left:8px">{{ status[:2] }}</span>
+    {% endfor %}
+    <span style="color:var(--muted);margin-left:8px">{{ now }}</span>
+  </span>
 </div>
 
 <div class="main">
@@ -469,6 +505,7 @@ def dashboard():
         total_pnl=total_pnl,
         total_pnl_pct=round(total_pnl_pct, 2),
         initial_capital=INITIAL_CAPITAL,
+        data_sources=get_data_source_status(),
         now=datetime.now().strftime("%Y-%m-%d %H:%M"),
     )
 
@@ -501,6 +538,126 @@ def manual_sell():
     mode   = request.form.get("mode", "SHORT").strip().upper()
     execute_sell(ticker, market, reason="수동 매도", mode=mode)
     return redirect(url_for("dashboard"))
+
+
+@app.route("/trading/monitor")
+def monitor_page():
+    from datetime import datetime
+    jobs = []
+    if _scheduler:
+        for job in _scheduler.get_jobs():
+            nxt = job.next_run_time
+            jobs.append({
+                "id":   job.id,
+                "next": nxt.strftime("%Y-%m-%d %H:%M %Z") if nxt else "미정",
+            })
+
+    all_trades = get_trade_history(200)
+    data_src   = get_data_source_status()
+
+    html = """<!DOCTYPE html>
+<html lang='ko'><head><meta charset='UTF-8'>
+<title>모니터링 — AutoTrader</title>
+<style>
+  :root{--bg:#0d1117;--surface:#161b22;--border:#21262d;--text:#e6edf3;
+        --muted:#8b949e;--green:#3fb950;--red:#f85149;--blue:#58a6ff;--yellow:#d29922}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'SF Mono',monospace;font-size:13px}
+  .topbar{background:var(--surface);border-bottom:1px solid var(--border);
+          padding:12px 20px;display:flex;align-items:center;gap:16px}
+  .topbar h1{font-size:15px;font-weight:700;color:var(--blue)}
+  .topbar a{color:var(--muted);text-decoration:none;font-size:12px}
+  .main{max-width:1000px;margin:0 auto;padding:20px}
+  .section{background:var(--surface);border:1px solid var(--border);
+           border-radius:10px;margin-bottom:20px}
+  .section-header{padding:12px 16px;border-bottom:1px solid var(--border);
+                  font-size:13px;font-weight:700}
+  table{width:100%;border-collapse:collapse}
+  th{padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);
+     border-bottom:1px solid var(--border);font-weight:600;text-transform:uppercase}
+  td{padding:9px 12px;border-bottom:1px solid var(--border);font-size:12px}
+  tr:last-child td{border-bottom:none}
+  .pos{color:var(--green)}.neg{color:var(--red)}.neu{color:var(--blue)}
+  .act-buy{background:rgba(63,185,80,.15);color:var(--green);padding:2px 8px;border-radius:4px}
+  .act-sell{background:rgba(248,81,73,.15);color:var(--red);padding:2px 8px;border-radius:4px}
+  .ok{color:var(--green)}.warn{color:var(--yellow)}.err{color:var(--red)}
+</style></head><body>
+<div class='topbar'>
+  <h1>AutoTrader</h1>
+  <a href='/trading'>대시보드</a>
+  <a href='/trading/backtest'>백테스트</a>
+  <span style='margin-left:auto;color:var(--muted);font-size:11px'>""" + datetime.now().strftime("%Y-%m-%d %H:%M") + """</span>
+</div>
+<div class='main'>
+
+<div class='section'>
+  <div class='section-header'>⏰ 자동 스케줄 현황</div>
+  <table><thead><tr><th>작업</th><th>다음 실행</th><th>주기</th></tr></thead><tbody>"""
+
+    schedule_info = {
+        "short_cycle": ("⚡ 단타 사이클",    "매주 금요일 15:00"),
+        "long_cycle":  ("📈 장기 사이클",    "매월 첫 월요일 09:00"),
+        "pol_cycle":   ("🏛️ 정치인 스캔",  "매일 08:00"),
+    }
+    if jobs:
+        for j in jobs:
+            label, freq = schedule_info.get(j["id"], (j["id"], ""))
+            html += f"<tr><td>{label}</td><td class='neu'>{j['next']}</td><td style='color:var(--muted)'>{freq}</td></tr>"
+    else:
+        html += "<tr><td colspan='3' style='text-align:center;padding:20px;color:var(--muted)'>APScheduler 미설치 — pip install APScheduler</td></tr>"
+
+    html += """</tbody></table></div>
+
+<div class='section'>
+  <div class='section-header'>🔌 데이터 소스 상태</div>
+  <table><thead><tr><th>소스</th><th>상태</th><th>발급처</th></tr></thead><tbody>"""
+
+    links = {
+        "polygon":       "https://polygon.io/dashboard",
+        "twelve_data":   "https://twelvedata.com",
+        "alpha_vantage": "https://alphavantage.co",
+        "yfinance":      "",
+    }
+    for src, status in data_src.items():
+        cls = "ok" if "✅" in status else "warn" if "⚠️" in status else "err"
+        link = links.get(src, "")
+        link_html = f"<a href='{link}' target='_blank' style='color:var(--blue)'>{link}</a>" if link else "—"
+        html += f"<tr><td>{src}</td><td class='{cls}'>{status}</td><td>{link_html}</td></tr>"
+
+    html += """</tbody></table></div>
+
+<div class='section'>
+  <div class='section-header'>📋 전체 거래 일지 (최근 200건)</div>
+  <table><thead><tr><th>시각</th><th>모드</th><th>종목</th><th>액션</th><th>가격</th><th>손익</th><th>사유</th></tr></thead><tbody>"""
+
+    mode_colors = {"LONG": "#58a6ff", "SHORT": "#d29922", "POL": "#3fb950"}
+    for t in all_trades:
+        mode  = t.get("mode", "SHORT")
+        col   = mode_colors.get(mode, "#8b949e")
+        act   = t.get("action", "")
+        cls   = "act-buy" if act == "BUY" else "act-sell"
+        pnl   = t.get("pnl", 0) or 0
+        pnl_s = f"+{pnl:,.0f}" if pnl > 0 else f"{pnl:,.0f}" if pnl < 0 else "—"
+        pnl_c = "pos" if pnl > 0 else "neg" if pnl < 0 else ""
+        html += (
+            f"<tr>"
+            f"<td style='color:var(--muted)'>{str(t.get('timestamp',''))[:16]}</td>"
+            f"<td><span style='color:{col};font-weight:700'>{mode}</span></td>"
+            f"<td><strong>{t.get('ticker','')}</strong></td>"
+            f"<td><span class='{cls}'>{act}</span></td>"
+            f"<td>{t.get('price',0):.2f}</td>"
+            f"<td class='{pnl_c}'>{pnl_s}</td>"
+            f"<td style='color:var(--muted);font-size:11px'>{str(t.get('reason',''))[:40]}</td>"
+            f"</tr>"
+        )
+
+    html += "</tbody></table></div></div></body></html>"
+    return html
+
+
+@app.route("/trading/datasources")
+def api_datasources():
+    return jsonify(get_data_source_status())
 
 
 @app.route("/trading/run/pol", methods=["POST"])
