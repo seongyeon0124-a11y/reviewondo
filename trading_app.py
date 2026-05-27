@@ -14,6 +14,10 @@ from trading.broker.paper import (
     execute_sell, get_cash, get_portfolio_value, get_positions_with_pnl,
     get_trade_history, init_db, reset_portfolio,
 )
+from trading.broker.live import (
+    execute_live_buy, execute_live_sell, get_live_account,
+    get_live_positions, get_status as get_live_status, is_live_enabled,
+)
 from trading.config import INITIAL_CAPITAL, WATCHLIST_KR, WATCHLIST_US
 from trading.data.politician import get_all_recent_trades
 from trading.data.prices import get_data_source_status
@@ -158,6 +162,8 @@ DASHBOARD_HTML = r"""
   <span class="badge badge-paper">PAPER</span>
   <a href="/">리뷰온도</a>
   <a href="/trading/backtest" style="color:var(--yellow)">📊 백테스트</a>
+  <a href="/trading/monitor" style="color:var(--muted)">⏰ 모니터</a>
+  <a href="/trading/live" style="color:var(--red)">🔴 실계좌</a>
   <span style="margin-left:auto;font-size:11px">
     {% for src, status in data_sources.items() %}
       <span title="{{ src }}" style="margin-left:8px">{{ status[:2] }}</span>
@@ -1019,6 +1025,339 @@ def api_backtest_run():
         freq=freq,
         use_politician=use_pol,
     )
+    return jsonify(result)
+
+
+LIVE_HTML = """
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>실계좌 연동 — AutoTrader</title>
+<style>
+  :root{--bg:#0d1117;--surface:#161b22;--border:#21262d;--text:#e6edf3;
+        --muted:#8b949e;--green:#3fb950;--red:#f85149;--blue:#58a6ff;--yellow:#d29922}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'SF Mono',monospace;font-size:13px}
+  .topbar{background:var(--surface);border-bottom:1px solid var(--border);
+          padding:12px 20px;display:flex;align-items:center;gap:16px}
+  .topbar h1{font-size:15px;font-weight:700;color:var(--blue)}
+  .topbar a{color:var(--muted);text-decoration:none;font-size:12px}
+  .main{max-width:1000px;margin:0 auto;padding:20px}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:20px}
+  .section-header{padding:12px 16px;border-bottom:1px solid var(--border);font-size:13px;font-weight:700}
+  .section-body{padding:16px}
+  table{width:100%;border-collapse:collapse}
+  th{padding:8px 12px;text-align:left;font-size:11px;color:var(--muted);
+     border-bottom:1px solid var(--border);font-weight:600;text-transform:uppercase}
+  td{padding:9px 12px;border-bottom:1px solid var(--border);font-size:12px}
+  tr:last-child td{border-bottom:none}
+  .pos{color:var(--green)}.neg{color:var(--red)}.neu{color:var(--blue)}.warn{color:var(--yellow)}
+  .ok{color:var(--green)}.err{color:var(--red)}
+  .kpi-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+  .kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .kpi .label{font-size:11px;color:var(--muted);margin-bottom:6px;text-transform:uppercase}
+  .kpi .value{font-size:22px;font-weight:800}
+  .kpi .sub{font-size:11px;color:var(--muted);margin-top:4px}
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:6px;
+       font-size:12px;font-weight:600;border:none;cursor:pointer;text-decoration:none}
+  .btn-buy{background:var(--green);color:#000}
+  .btn-sell{background:var(--red);color:#fff}
+  .btn-ghost{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+  .btn:hover{opacity:.85}
+  .warning-box{background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.4);
+               border-radius:8px;padding:14px 16px;margin-bottom:20px;font-size:12px;color:var(--red)}
+  .setup-box{background:rgba(88,166,255,.06);border:1px solid rgba(88,166,255,.3);
+             border-radius:8px;padding:16px;margin-bottom:20px}
+  .setup-box h3{font-size:13px;font-weight:700;margin-bottom:10px;color:var(--blue)}
+  .setup-box code{background:#0d1117;padding:2px 6px;border-radius:4px;font-size:11px;color:var(--yellow)}
+  .setup-box p{font-size:12px;color:var(--muted);margin:6px 0;line-height:1.6}
+  pre{background:#0d1117;border:1px solid var(--border);border-radius:6px;
+      padding:12px;font-size:11px;overflow-x:auto;white-space:pre;color:var(--text);margin:8px 0}
+  .tag-live{background:rgba(248,81,73,.2);color:var(--red);padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700}
+  .tag-paper{background:rgba(88,166,255,.15);color:var(--blue);padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700}
+  .tag-mock{background:rgba(210,153,34,.15);color:var(--yellow);padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700}
+  #toast{position:fixed;bottom:20px;right:20px;background:var(--surface);border:1px solid var(--border);
+         border-radius:8px;padding:12px 18px;font-size:12px;display:none;z-index:99}
+  .act-buy{background:rgba(63,185,80,.15);color:var(--green);padding:2px 8px;border-radius:4px}
+  .act-sell{background:rgba(248,81,73,.15);color:var(--red);padding:2px 8px;border-radius:4px}
+  input[type=text],input[type=number]{background:#0d1117;border:1px solid var(--border);color:var(--text);
+    padding:7px 10px;border-radius:6px;font-size:12px;font-family:inherit;width:100%}
+  .form-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+  .form-group{display:flex;flex-direction:column;gap:5px;flex:1;min-width:100px}
+  .form-group label{font-size:11px;color:var(--muted);text-transform:uppercase}
+  select{background:#0d1117;border:1px solid var(--border);color:var(--text);
+    padding:7px 10px;border-radius:6px;font-size:12px;font-family:inherit}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>AutoTrader</h1>
+  <a href="/trading">대시보드</a>
+  <a href="/trading/monitor">모니터링</a>
+  <span style="margin-left:auto;color:var(--muted);font-size:11px">실계좌 연동</span>
+</div>
+<div class="main">
+
+{% if not live_enabled %}
+<div class="warning-box">
+  ⚠️ <strong>LIVE_MODE=false</strong> — 실거래 기능이 비활성화 상태입니다.<br>
+  Railway 환경변수에 <code>LIVE_MODE=true</code> 를 추가해야 실계좌 주문이 가능합니다.
+</div>
+{% else %}
+<div class="warning-box">
+  🔴 <strong>LIVE MODE 활성화됨</strong> — 주문이 실제 계좌에 반영됩니다. 신중히 사용하세요.
+</div>
+{% endif %}
+
+<!-- 설정 안내 -->
+<div class="setup-box">
+  <h3>🔧 Railway 환경변수 설정 방법</h3>
+  <p>Railway 프로젝트 → Settings → Variables 에서 아래 값을 추가하세요.</p>
+
+  <p><strong>미국 주식 (Alpaca)</strong> — 무료 가입: <a href="https://alpaca.markets" target="_blank" style="color:var(--blue)">alpaca.markets</a></p>
+  <pre>ALPACA_API_KEY=PKxxxxxxxxxxxxxxxx
+ALPACA_SECRET_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ALPACA_PAPER=true   # 페이퍼 트레이딩 → 실거래 시 false</pre>
+
+  <p><strong>한국 주식 (한국투자증권)</strong> — 신청: <a href="https://apiportal.koreainvestment.com" target="_blank" style="color:var(--blue)">apiportal.koreainvestment.com</a></p>
+  <pre>KIS_APP_KEY=Pxxxxxxxxxxxxxxxxxxxxxxxxxx
+KIS_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+KIS_ACCOUNT_NO=12345678-01   # 계좌번호 (8자리-2자리)
+KIS_MOCK=true   # 모의투자 → 실거래 시 false</pre>
+
+  <p><strong>실거래 활성화</strong></p>
+  <pre>LIVE_MODE=true</pre>
+</div>
+
+<!-- 연동 상태 -->
+<div class="section">
+  <div class="section-header">🔌 연동 상태</div>
+  <table><thead><tr><th>브로커</th><th>시장</th><th>상태</th><th>모드</th></tr></thead><tbody>
+  <tr>
+    <td><strong>Alpaca</strong></td><td>US</td>
+    <td>{% if status.alpaca_configured %}<span class="ok">✅ 키 연결됨</span>{% else %}<span class="err">❌ 키 없음</span>{% endif %}</td>
+    <td>{% if status.alpaca_configured %}{% if status.alpaca_paper %}<span class="tag-paper">PAPER</span>{% else %}<span class="tag-live">LIVE</span>{% endif %}{% else %}—{% endif %}</td>
+  </tr>
+  <tr>
+    <td><strong>KIS (한국투자증권)</strong></td><td>KR</td>
+    <td>{% if status.kis_configured %}<span class="ok">✅ 키 연결됨</span>{% else %}<span class="err">❌ 키 없음</span>{% endif %}</td>
+    <td>{% if status.kis_configured %}{% if status.kis_mock %}<span class="tag-mock">MOCK</span>{% else %}<span class="tag-live">LIVE</span>{% endif %}{% else %}—{% endif %}</td>
+  </tr>
+  </tbody></table>
+</div>
+
+<!-- Alpaca 계좌 -->
+{% if status.alpaca_configured %}
+<div class="kpi-row">
+  <div class="kpi">
+    <div class="label">Alpaca 현금 <span class="tag-{% if status.alpaca_paper %}paper{% else %}live{% endif %}">{% if status.alpaca_paper %}PAPER{% else %}LIVE{% endif %}</span></div>
+    <div class="value neu">${{ "%.2f"|format(alpaca_account.get('cash', 0)) }}</div>
+    <div class="sub">구매력 ${{ "%.2f"|format(alpaca_account.get('buying_power', 0)) }}</div>
+  </div>
+  <div class="kpi">
+    <div class="label">Alpaca 포트폴리오</div>
+    <div class="value neu">${{ "%.2f"|format(alpaca_account.get('portfolio_value', 0)) }}</div>
+    <div class="sub">equity ${{ "%.2f"|format(alpaca_account.get('equity', 0)) }}</div>
+  </div>
+  <div class="kpi">
+    <div class="label">상태</div>
+    <div class="value" style="font-size:14px">{{ alpaca_account.get('status', '—') }}</div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-header">📊 Alpaca 보유 포지션</div>
+  {% if alpaca_positions %}
+  <table><thead><tr><th>종목</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가손익</th><th>수익률</th><th></th></tr></thead>
+  <tbody>{% for p in alpaca_positions %}
+    <tr>
+      <td><strong>{{ p.ticker }}</strong></td>
+      <td>{{ "%.4f"|format(p.shares) }}</td>
+      <td>${{ "%.2f"|format(p.avg_cost) }}</td>
+      <td>${{ "%.2f"|format(p.current_price) }}</td>
+      <td class="{% if p.pnl >= 0 %}pos{% else %}neg{% endif %}">{% if p.pnl >= 0 %}+{% endif %}${{ "%.2f"|format(p.pnl) }}</td>
+      <td class="{% if p.pnl_pct >= 0 %}pos{% else %}neg{% endif %}">{% if p.pnl_pct >= 0 %}+{% endif %}{{ p.pnl_pct }}%</td>
+      <td>
+        <button class="btn btn-sell" style="padding:3px 10px;font-size:11px"
+          onclick="liveSell('{{ p.ticker }}','US')">매도</button>
+      </td>
+    </tr>
+  {% endfor %}</tbody></table>
+  {% else %}<div style="padding:20px;text-align:center;color:var(--muted)">포지션 없음</div>{% endif %}
+</div>
+{% endif %}
+
+<!-- KIS 계좌 -->
+{% if status.kis_configured %}
+<div class="kpi-row" style="grid-template-columns:repeat(2,1fr)">
+  <div class="kpi">
+    <div class="label">KIS 현금 <span class="tag-{% if status.kis_mock %}mock{% else %}live{% endif %}">{% if status.kis_mock %}MOCK{% else %}LIVE{% endif %}</span></div>
+    <div class="value neu">{{ "%.0f"|format(kis_account.get('cash', 0)) }}원</div>
+    <div class="sub">구매력 {{ "%.0f"|format(kis_account.get('buy_power', 0)) }}원</div>
+  </div>
+  <div class="kpi">
+    <div class="label">KIS 총 평가</div>
+    <div class="value neu">{{ "%.0f"|format(kis_account.get('total_eval', 0)) }}원</div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-header">📊 KIS 보유 종목</div>
+  {% if kis_positions %}
+  <table><thead><tr><th>종목코드</th><th>종목명</th><th>수량</th><th>평균단가</th><th>현재가</th><th>평가손익</th><th>수익률</th><th></th></tr></thead>
+  <tbody>{% for p in kis_positions %}
+    <tr>
+      <td><strong>{{ p.ticker }}</strong></td>
+      <td>{{ p.get('name', '') }}</td>
+      <td>{{ "%.0f"|format(p.shares) }}</td>
+      <td>{{ "%.0f"|format(p.avg_cost) }}원</td>
+      <td>{{ "%.0f"|format(p.current_price) }}원</td>
+      <td class="{% if p.pnl >= 0 %}pos{% else %}neg{% endif %}">{% if p.pnl >= 0 %}+{% endif %}{{ "%.0f"|format(p.pnl) }}원</td>
+      <td class="{% if p.pnl_pct >= 0 %}pos{% else %}neg{% endif %}">{% if p.pnl_pct >= 0 %}+{% endif %}{{ p.pnl_pct }}%</td>
+      <td>
+        <button class="btn btn-sell" style="padding:3px 10px;font-size:11px"
+          onclick="liveSell('{{ p.ticker }}','KR')">매도</button>
+      </td>
+    </tr>
+  {% endfor %}</tbody></table>
+  {% else %}<div style="padding:20px;text-align:center;color:var(--muted)">포지션 없음</div>{% endif %}
+</div>
+{% endif %}
+
+<!-- 수동 주문 -->
+{% if live_enabled %}
+<div class="section">
+  <div class="section-header">📤 수동 주문</div>
+  <div class="section-body">
+    <div class="form-row">
+      <div class="form-group" style="max-width:80px">
+        <label>시장</label>
+        <select id="ord-market">
+          <option value="US">US</option>
+          <option value="KR">KR</option>
+        </select>
+      </div>
+      <div class="form-group" style="max-width:100px">
+        <label>종목</label>
+        <input type="text" id="ord-ticker" placeholder="AAPL">
+      </div>
+      <div class="form-group" style="max-width:120px">
+        <label>금액(USD) / 수량(KR)</label>
+        <input type="number" id="ord-amount" placeholder="1000">
+      </div>
+      <button class="btn btn-buy" onclick="manualOrder('buy')">매수</button>
+      <button class="btn btn-sell" onclick="manualOrder('sell')">매도</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+</div>
+<div id="toast"></div>
+<script>
+function showToast(msg, ok=true) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  t.style.borderColor = ok ? '#3fb950' : '#f85149';
+  setTimeout(() => t.style.display = 'none', 5000);
+}
+
+async function liveSell(ticker, market) {
+  if (!confirm('[' + ticker + '] 전량 매도하겠습니까? 실제 주문입니다.')) return;
+  const r = await fetch('/trading/live/sell', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ticker, market}),
+  });
+  const d = await r.json();
+  showToast(d.ok ? ticker + ' 매도 완료' : '오류: ' + d.msg, d.ok);
+  if (d.ok) setTimeout(() => location.reload(), 1500);
+}
+
+async function manualOrder(side) {
+  const ticker = document.getElementById('ord-ticker').value.trim().toUpperCase();
+  const market = document.getElementById('ord-market').value;
+  const amount = parseFloat(document.getElementById('ord-amount').value);
+  if (!ticker || !amount) { showToast('종목과 금액을 입력하세요', false); return; }
+  const label = side === 'buy' ? '매수' : '매도';
+  if (!confirm('[' + ticker + '] ' + label + ' ' + amount + (market === 'KR' ? '주' : 'USD') + ' — 실제 주문입니다.')) return;
+  const r = await fetch('/trading/live/' + side, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ticker, market, amount}),
+  });
+  const d = await r.json();
+  showToast(d.ok ? ticker + ' ' + label + ' 주문 완료' : '오류: ' + d.msg, d.ok);
+  if (d.ok) setTimeout(() => location.reload(), 2000);
+}
+</script>
+</body>
+</html>
+"""
+
+
+@app.route("/trading/live")
+def live_page():
+    status = get_live_status()
+    alpaca_account = {}
+    alpaca_positions = []
+    kis_account = {}
+    kis_positions = []
+
+    if status["alpaca_configured"]:
+        try:
+            alpaca_account   = get_live_account("US")
+            alpaca_positions = get_live_positions("US")
+        except Exception:
+            pass
+
+    if status["kis_configured"]:
+        try:
+            kis_account   = get_live_account("KR")
+            kis_positions = get_live_positions("KR")
+        except Exception:
+            pass
+
+    return render_template_string(
+        LIVE_HTML,
+        status=status,
+        live_enabled=is_live_enabled(),
+        alpaca_account=alpaca_account,
+        alpaca_positions=alpaca_positions,
+        kis_account=kis_account,
+        kis_positions=kis_positions,
+    )
+
+
+@app.route("/trading/live/status")
+def api_live_status():
+    return jsonify(get_live_status())
+
+
+@app.route("/trading/live/buy", methods=["POST"])
+def api_live_buy():
+    body   = request.get_json(silent=True) or {}
+    ticker = body.get("ticker", "").strip().upper()
+    market = body.get("market", "US").strip().upper()
+    amount = body.get("amount")
+    qty    = body.get("qty")
+
+    if market == "US":
+        result = execute_live_buy(ticker, market, amount_usd=float(amount) if amount else None, qty=qty)
+    else:
+        result = execute_live_buy(ticker, market, amount_usd=float(amount) if amount else None, qty=int(qty) if qty else None)
+    return jsonify(result)
+
+
+@app.route("/trading/live/sell", methods=["POST"])
+def api_live_sell():
+    body   = request.get_json(silent=True) or {}
+    ticker = body.get("ticker", "").strip().upper()
+    market = body.get("market", "US").strip().upper()
+    qty    = body.get("qty")
+    result = execute_live_sell(ticker, market, qty=float(qty) if qty else None)
     return jsonify(result)
 
 
